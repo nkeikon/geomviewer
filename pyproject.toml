@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.scripts]
-viewgeom = "viewgeom.viewgeom:main"    # CLI entry point
+viewgeom = "viewgeom:main"
 
 [project.urls]
 Homepage = "https://github.com/nkeikon/geomviewer"
@@ -33,4 +33,3 @@ Issues   = "https://github.com/nkeikon/geomviewer/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/viewgeom"]
-
