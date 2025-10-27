@@ -119,7 +119,10 @@ def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
         avg_vertices = np.mean(vertex_counts) if vertex_counts else 0
         if len(gdf) > 5000 or (avg_vertices > 2000 and len(gdf) > 200):
             print(f"[INFO] Simplifying geometries (tol={simplify})")
-            gdf["geometry"] = gdf.geometry.simplify(simplify, preserve_topology=True)
+            try:
+                gdf["geometry"] = gdf.geometry.simplify(simplify, preserve_topology=True)
+            except Exception as e:
+                print(f"[WARN] Simplify failed — continuing without simplification ({e})")
 
     # --- Remove invalid empties ---
     gdf = gdf[~gdf.geometry.is_empty]
@@ -552,6 +555,9 @@ def main():
     app = QApplication(sys.argv)
     win = VectorViewer(args.path, args.column, args.limit, args.simplify, args.layer)
     win.show()
+    app.processEvents()
+    win.raise_()
+    win.activateWindow()
     sys.exit(app.exec())
 
 

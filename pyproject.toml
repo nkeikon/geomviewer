@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "viewgeom"                      # PyPI package name users will install
-version = "0.1.0"
+version = "0.1.1"
 description = "Fast, lightweight vector viewer for .shp, .geojson, .gpkg, and (geo)parquet with a simple Qt UI."
 readme = "README.md"
 requires-python = ">=3.9"
