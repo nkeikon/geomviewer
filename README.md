@@ -68,4 +68,5 @@ viewgeom mangrove_with_EAD.geoparquet --limit 150000 --simplify off
 Longenecker, Jake; Lee, Christine; Hulley, Glynn; Cawse-Nicholson, Kerry; Purkis, Sam; Gleason, Art; Otis, Dan; Galdamez, Ileana; Meiseles, Jacquelyn. GeoViewer v1.12: NASA JPL Thermal Viewer—Semi-Automated Georeferencer User Guide & Reference Manual. Jet Propulsion Laboratory, California Institute of Technology, 2025. PDF.
 
 ## License
-This project is released under the MIT License.
+This project is released under the MIT License © 2025 Keiko Nomura 
+If you find this tool useful, please consider supporting or acknowledging the author. 
