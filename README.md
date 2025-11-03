@@ -1,4 +1,5 @@
 # viewgeom
+[![Downloads](https://static.pepy.tech/badge/viewgeom)](https://pepy.tech/project/viewgeom)
 [![PyPI version](https://img.shields.io/pypi/v/viewgeom)](https://pypi.org/project/viewgeom/)
 [![Python version](https://img.shields.io/badge/python-%3E%3D3.9-blue.svg)](https://pypi.org/project/viewgeom/)
 
@@ -68,5 +69,6 @@ viewgeom mangrove_with_EAD.geoparquet --limit 150000 --simplify off
 Longenecker, Jake; Lee, Christine; Hulley, Glynn; Cawse-Nicholson, Kerry; Purkis, Sam; Gleason, Art; Otis, Dan; Galdamez, Ileana; Meiseles, Jacquelyn. GeoViewer v1.12: NASA JPL Thermal Viewer—Semi-Automated Georeferencer User Guide & Reference Manual. Jet Propulsion Laboratory, California Institute of Technology, 2025. PDF.
 
 ## License
-This project is released under the MIT License © 2025 Keiko Nomura 
+This project is released under the MIT License © 2025 Keiko Nomura.
+
 If you find this tool useful, please consider supporting or acknowledging the author. 
