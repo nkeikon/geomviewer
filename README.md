@@ -72,3 +72,7 @@ Longenecker, Jake; Lee, Christine; Hulley, Glynn; Cawse-Nicholson, Kerry; Purkis
 This project is released under the MIT License © 2025 Keiko Nomura.
 
 If you find this tool useful, please consider supporting or acknowledging the author. 
+
+## Useful links
+- [Featured by Matt Forrest!](https://www.linkedin.com/posts/mbforr_sometimes-to-make-big-leaps-forward-we-have-activity-7391837368929955840-s0O0?utm_source=share&utm_medium=member_desktop&rcm=ACoAAAA0INsBVIO1f6nS_NkKqFh4Na1ZpoYo2fc)
+- [Demo at the initial release](https://www.linkedin.com/posts/keiko-nomura-0231891_dont-you-sometimes-just-want-to-see-a-activity-7388654251562102784-L_iX?utm_source=share&utm_medium=member_desktop&rcm=ACoAAAA0INsBVIO1f6nS_NkKqFh4Na1ZpoYo2fc)
