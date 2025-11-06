@@ -3,15 +3,15 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "viewgeom"                      # PyPI package name users will install
-version = "0.1.1"
-description = "Fast, lightweight vector viewer for .shp, .geojson, .gpkg, and (geo)parquet with a simple Qt UI."
+name = "viewgeom"
+version = "0.1.2"
+description = "Command line vector viewer for .shp, .geojson, .gpkg, .geoparquet, .kml, and .kmz with a simple Qt UI."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Keiko Nomura" }]
 
-# Core deps to make everything work out of the box (no Fiona required)
+# Core dependencies to make everything work out of the box (no Fiona required)
 dependencies = [
   "geopandas>=0.13",
   "shapely>=2.0",
@@ -23,13 +23,21 @@ dependencies = [
   "PySide6>=6.5"
 ]
 
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: GIS",
+  "Intended Audience :: Science/Research"
+]
+
 [project.scripts]
 viewgeom = "viewgeom:main"
 
 [project.urls]
 Homepage = "https://github.com/nkeikon/geomviewer"
-Source   = "https://github.com/nkeikon/geomviewer"
-Issues   = "https://github.com/nkeikon/geomviewer/issues"
+Repository = "https://github.com/nkeikon/geomviewer"
+Issues = "https://github.com/nkeikon/geomviewer/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/viewgeom"]

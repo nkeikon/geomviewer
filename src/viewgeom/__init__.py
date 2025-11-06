@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-viewgeom — Interactive viewer for vector datasets (.shp, .geojson, .gpkg, .parquet, .geoparquet)
+viewgeom — Interactive viewer for vector datasets (.shp, .geojson, .gpkg, .parquet, .geoparquet, .kml, .kmz)
 """
 
-import sys, os
+import sys, os, zipfile, tempfile
 import geopandas as gpd
 import pandas as pd
 import numpy as np
@@ -17,8 +17,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPen, QColor, QPainterPath, QPainter
 from PySide6.QtCore import Qt
 
-__version__ = "0.1.1"
-
+__version__ = "0.1.2"
 
 # ---------------------------------------------------------------------
 # Utilities
@@ -75,8 +74,68 @@ def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
             print("[INFO] pyogrio not installed — loading default layer only.")
             gdf = gpd.read_file(path)
 
-    else:
-        raise ValueError(f"Unsupported format: {ext}")
+    # --- KML / KMZ ---
+    elif ext in (".kml", ".kmz"):
+        print(f"[INFO] Loading {ext.upper()} file")
+
+        from shapely.geometry import LineString, MultiLineString, Polygon, MultiPolygon
+        from shapely.ops import unary_union
+
+        def polygon_to_outline(geom):
+            """Convert any Polygon or MultiPolygon into a boundary LineString or MultiLineString."""
+            try:
+                if geom is None or geom.is_empty:
+                    return None
+                if isinstance(geom, Polygon):
+                    return LineString(geom.exterior.coords)
+                elif isinstance(geom, MultiPolygon):
+                    lines = []
+                    for p in geom.geoms:
+                        if p is None or p.is_empty or not isinstance(p, Polygon):
+                            continue
+                        lines.append(LineString(p.exterior.coords))
+                    if not lines:
+                        return None
+                    if len(lines) == 1:
+                        return lines[0]
+                    return unary_union(lines)  # safely merges into MultiLineString
+                else:
+                    return geom
+            except Exception as e:
+                print(f"[WARN] Skipping invalid polygon: {e}")
+                return None
+
+        try:
+            # Extract or read the KML
+            if ext == ".kml":
+                gdf = gpd.read_file(path, driver="KML")
+            else:
+                with zipfile.ZipFile(path, "r") as zf:
+                    kml_files = [n for n in zf.namelist() if n.lower().endswith(".kml")]
+                    if not kml_files:
+                        raise ValueError("No .kml file found inside KMZ archive.")
+                    kml_name = kml_files[0]
+                    tmpdir = tempfile.mkdtemp(prefix="viewgeom_kmz_")
+                    extracted_path = zf.extract(kml_name, tmpdir)
+                    kml_path = os.path.abspath(extracted_path)
+                    print(f"[DEBUG] Extracted KML → {kml_path}")
+                gdf = gpd.read_file(kml_path, driver="KML")
+
+            # Convert polygons → outlines only
+            geom_before = gdf.geom_type.unique().tolist()
+            gdf["geometry"] = gdf.geometry.apply(polygon_to_outline)
+
+            # Keep only valid line geometries
+            gdf = gdf[gdf.geometry.notnull() & gdf.geometry.is_valid]
+            gdf = gdf[gdf.geom_type.isin(["LineString", "MultiLineString"])]
+
+            geom_after = gdf.geom_type.unique().tolist()
+            print(f"[INFO] Converted polygons to outlines (before: {geom_before}, after: {geom_after})")
+            print(f"[INFO] KML/KMZ loaded successfully with {len(gdf):,} features")
+            return gdf
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to load KML/KMZ file: {e}")
 
     # --- CRS handling ---
     if gdf.crs is None:
@@ -148,7 +207,6 @@ def get_color_mapping(gdf, column, cmap_name="viridis"):
         colors = ["yellow"] * len(gdf)
     return colors, None
 
-
 # ---------------------------------------------------------------------
 # Graphics view (zoom/pan)
 # ---------------------------------------------------------------------
@@ -168,7 +226,6 @@ class VectorView(QGraphicsView):
             return
         factor = self._wheel_zoom_step if delta > 0 else 1 / self._wheel_zoom_step
         self.scale(factor, factor)
-
 
 # ---------------------------------------------------------------------
 # Viewer
@@ -219,27 +276,32 @@ class VectorViewer(QMainWindow):
         # ---- Load global basemap ----
         self._load_basemap()
 
-        # ---- Numeric column selection ----
-        num_cols = [c for c in self.gdf.columns if self.gdf[c].dtype.kind in "if"]
-        if not num_cols:
-            # print("[WARN] No numeric columns found — using uniform color.")
+        # ---- Skip numeric column selection for line geometries ----
+        if all(gt in ("LineString", "MultiLineString") for gt in self.gdf.geom_type.unique()):
             self.color_col = None
+            print("[INFO] Detected line-only dataset — skipping color-by-column.")
         else:
-            if column and column in num_cols:
-                self.color_col = column
+            # ---- Numeric column selection ----
+            num_cols = [c for c in self.gdf.columns if self.gdf[c].dtype.kind in "if"]
+            if not num_cols:
+                # print("[WARN] No numeric columns found — using uniform color.")
+                self.color_col = None
             else:
-                print("[INFO] Numeric columns detected:")
-                for i, c in enumerate(num_cols):
-                    print(f"  [{i}] {c}")
-                choice = input("Select column index: ").strip()
-                try:
-                    idx = int(choice)
-                    self.color_col = num_cols[idx]
-                except Exception:
-                    print("[INFO] Invalid selection, using first column.")
-                    self.color_col = num_cols[0]
-                if self.color_col:
-                    print(f"[INFO] Coloring by: {self.color_col}")
+                if column and column in num_cols:
+                    self.color_col = column
+                else:
+                    print("[INFO] Numeric columns detected:")
+                    for i, c in enumerate(num_cols):
+                        print(f"  [{i}] {c}")
+                    choice = input("Select column index: ").strip()
+                    try:
+                        idx = int(choice)
+                        self.color_col = num_cols[idx]
+                    except Exception:
+                        print("[INFO] Invalid selection, using first column.")
+                        self.color_col = num_cols[0]
+                    if self.color_col:
+                        print(f"[INFO] Coloring by: {self.color_col}")
 
         self._update_window_title()
 
@@ -254,6 +316,7 @@ class VectorViewer(QMainWindow):
             # Automatically load basemap if coloring by numeric data
             self._load_basemap()
             self._draw_basemap()
+            print("[INFO] Basemap displayed")
         else:
             # Skip basemap by default when only boundaries are shown
             self.base_gdf = None
@@ -277,7 +340,7 @@ class VectorViewer(QMainWindow):
             )
             if self.base_gdf.crs != self.gdf.crs:
                 self.base_gdf = self.base_gdf.to_crs(self.gdf.crs)
-            print("[INFO] Basemap loaded")
+            # print("[INFO] Basemap loaded")
         except Exception as e:
             print(f"[WARN] Could not load basemap: {e}")
             self.base_gdf = None
@@ -352,29 +415,30 @@ class VectorViewer(QMainWindow):
             geom = row.geometry
             if geom is None or geom.is_empty:
                 continue
-
+            
             # Choose color and brush per feature
+            palette = QApplication.palette()
+            bg = palette.window().color()
+            brightness = (bg.red() * 299 + bg.green() * 587 + bg.blue() * 114) / 1000
+
             if self.color_col:
+                # Fill color from numeric column
                 color = self._color_for_value(row["_color"])
                 brush = color
+
+                # Add thin, contrasting edge for better visibility
+                edge_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)
+                pen.setColor(edge_color)
+                pen.setWidthF(0.3)
             else:
-                # No numeric column: outline only, use strong contrasting color
-                palette = QApplication.palette()
-                bg = palette.window().color()
-                brightness = (bg.red() * 299 + bg.green() * 587 + bg.blue() * 114) / 1000
-
-                # Choose outline color depending on theme
+                # No numeric column: outline only, strong red border
                 if brightness < 128:
-                    # Dark background → bright red
-                    color = QColor(255, 80, 80)   # vivid red
+                    color = QColor(255, 80, 80)   # bright red on dark background
                 else:
-                    # Light background → dark red or blue for better contrast
-                    color = QColor(150, 0, 0)     # deep red
-                    # or try: color = QColor(0, 70, 200)  # navy blue alternative
-
+                    color = QColor(150, 0, 0)     # deep red on light background
                 brush = Qt.BrushStyle.NoBrush
-
-            pen.setColor(color)
+                pen.setColor(color)
+                pen.setWidthF(0.8)
 
             geoms = geom.geoms if geom.geom_type.startswith("Multi") else [geom]
             for g in geoms:
@@ -472,11 +536,14 @@ class VectorViewer(QMainWindow):
         elif k in (Qt.Key.Key_Down, Qt.Key.Key_S):
             vsb.setValue(vsb.value() + 50)
         elif k == Qt.Key.Key_M:
+            # Only switch colormap if a numeric color column exists
+            if not self.color_col:
+                print("[INFO] Colormap switching disabled (no color-by column).")
+                return
             self.cmap_index = (self.cmap_index + 1) % len(self.colormaps)
             cmap_name = self.colormaps[self.cmap_index]
             print(f"[INFO] Switched colormap to: {cmap_name}")
-            if self.color_col:
-                self.gdf["_color"], _ = get_color_mapping(self.gdf, self.color_col, cmap_name=cmap_name)
+            self.gdf["_color"], _ = get_color_mapping(self.gdf, self.color_col, cmap_name=cmap_name)
             self._draw_geoms()
         elif k in (Qt.Key.Key_BraceRight, Qt.Key.Key_BracketRight):  # ]
             if self.color_col:
@@ -496,7 +563,7 @@ class VectorViewer(QMainWindow):
                 if self.base_gdf is None:
                     self._load_basemap()
                 self._draw_basemap()
-                # print("[INFO] Basemap added")
+                print("[INFO] Basemap added")
         elif k == Qt.Key.Key_R:
             self.view.resetTransform()
             self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)

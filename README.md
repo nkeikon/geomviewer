@@ -10,6 +10,7 @@ Supports:
 - GeoJSON (.geojson, .json)
 - GeoPackage (.gpkg)
 - GeoParquet (.parquet, .geoparquet)
+- KML, KMZ  (.kml, .kmz — displayed as boundaries only)
 
 It automatically detects numeric columns and allows switching visualization columns.
 
@@ -61,6 +62,7 @@ viewgeom mangrove_with_EAD.geoparquet --limit 150000 --simplify off
 > • Complex geometries are simplified by default (`--simplify 0.01`).  
 >   Use `--simplify off` to fully disable simplification.  
 > • Basemap requires an active **internet connection**.  
+> • **KML/KMZ files are rendered as outlines only** (converted from polygons to boundary lines for faster display and compatibility).
 
 ## Credit & License
 `viewgeom`, which followed from `viewtif`, was inspired by the NASA JPL Thermal Viewer — Semi-Automated Georeferencer (GeoViewer v1.12) developed by Jake Longenecker (University of Miami Rosenstiel School of Marine, Atmospheric & Earth Science) while at the NASA Jet Propulsion Laboratory, California Institute of Technology, with inspiration from JPL’s ECOSTRESS geolocation batch workflow by Andrew Alamillo. The original GeoViewer was released under the MIT License (2025) and may be freely adapted with citation.
