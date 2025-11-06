@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPen, QColor, QPainterPath, QPainter
 from PySide6.QtCore import Qt
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 
 # ---------------------------------------------------------------------
