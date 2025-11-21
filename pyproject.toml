@@ -20,11 +20,8 @@ dependencies = [
   "numpy>=1.23",
   "matplotlib>=3.7",
   "PySide6>=6.5",
-  "requests",
+  "requests"
 ]
-
-[project.optional-dependencies]
-parquet = ["pyarrow>=12"]
 
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -33,6 +30,10 @@ classifiers = [
   "Topic :: Scientific/Engineering :: GIS",
   "Intended Audience :: Science/Research"
 ]
+
+[project.optional-dependencies]
+parquet = ["pyarrow>=12"]
+
 
 [project.scripts]
 viewgeom = "viewgeom:main"
