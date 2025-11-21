@@ -10,9 +10,9 @@ Supports:
 - GeoJSON (.geojson, .json)
 - GeoPackage (.gpkg)
 - GeoParquet (.parquet, .geoparquet)
-- KML, KMZ  (.kml, .kmz — displayed as boundaries only)
+- KML, KMZ  (.kml, .kmz)
 
-It automatically detects numeric columns and allows switching visualization columns.
+It automatically detects layers and columns and allows switching visualization columns.
 
 ## Installation
 ```bash
@@ -20,17 +20,25 @@ pip install viewgeom
 ```
 > **Note:** Requires Python 3.9 or later.
 
-## Usage
+GeoParquet and Parquet support requires pyarrow, which is optional:
 ```bash
-viewgeom <path> [--column <name>] [--layer <name>] [--limit N] [--simplify tol]
+pip install "viewgeom[parquet]"
 ```
 
-| Option                 | Description                                                     |
-| ---------------------- | --------------------------------------------------------------- |
-| `--column <name>`      | Choose numeric column for coloring                              |
-| `--layer <name>`       | Select layer in a `.gpkg` file                                  |
-| `--limit N`            | Max number of features to load (default: 100000)                |
-| `--simplify <tol/off>` | Geometry simplification (default: `0.01`, use `off` to disable) |
+## Usage
+```bash
+viewgeom <path> [--column <name>] [--layer <name>] [--limit N] [--simplify tol] [--point-size px]
+
+```
+
+| Option                 | Description                                                                 |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| `--column <name>`      | Choose numeric column for coloring                                           |
+| `--layer <name>`       | Select layer in a `.gpkg` file                                               |
+| `--limit N`            | Max number of features to load (default 100000)                              |
+| `--simplify <tol/off>` | Geometry simplification. Use a number for tolerance or `off` to disable      |
+| `--point-size px`      | Set point size in pixels. Overrides automatic point sizing                   |
+| `--version`            | Show version                                                                 |
 
 ### Examples
 ```bash
@@ -51,7 +59,7 @@ viewgeom mangrove_with_EAD.geoparquet --limit 150000 --simplify off
 | ---------- | ---------------------- |
 | `+` / `-`  | Zoom in / out          |
 | Arrow keys | Pan                    |
-| `[` / `]`  | Switch numeric columns |
+| `[` / `]`  | Switch columns         |
 | `M`        | Switch colormap        |
 | `B`        | Toggle basemap         |
 | `R`        | Reset view             |
@@ -61,8 +69,15 @@ viewgeom mangrove_with_EAD.geoparquet --limit 150000 --simplify off
 > • For fast performance, only the first **100,000 features** are displayed by default. Adjust with `--limit` (e.g., `--limit 500000` or `--limit 0` for no limit).  
 > • Complex geometries are simplified by default (`--simplify 0.01`).  
 >   Use `--simplify off` to fully disable simplification.  
-> • Basemap requires an active **internet connection**.  
-> • **KML/KMZ files are rendered as outlines only** (converted from polygons to boundary lines for faster display and compatibility).
+
+### Update in v0.1.3
+- `Viewgeom` supports both numeric and categorical columns for visualization, while still giving the option to display outlines only by entering 'x' when prompted.
+- For a numeric column, the tool prints the data range as well as the visualization stretch range. For a categorical column, it prints the number of unique categories and show the first few (up to five).
+- For point data, the tool prints the automatically chosen point size. You can override this by using the `--point-size` option.
+- KML/KMZ files are fully supported and their attribute columns can be used for coloring.
+- If an internet connection is slow or unavailable, the basemap will be sipped and the viewer will continue without it.
+- The default behavior still limits large datasets to 100000 features. In addition to this, if the feature density is high, the tool further limits the sample to 1000 features. Users can adjust this behavior with the --limit option.
+- As a safeguard, if drawing takes more than 30 seconds, viewgeom will exit automatically.
 
 ## Credit & License
 `viewgeom`, which followed from `viewtif`, was inspired by the NASA JPL Thermal Viewer — Semi-Automated Georeferencer (GeoViewer v1.12) developed by Jake Longenecker (University of Miami Rosenstiel School of Marine, Atmospheric & Earth Science) while at the NASA Jet Propulsion Laboratory, California Institute of Technology, with inspiration from JPL’s ECOSTRESS geolocation batch workflow by Andrew Alamillo. The original GeoViewer was released under the MIT License (2025) and may be freely adapted with citation.

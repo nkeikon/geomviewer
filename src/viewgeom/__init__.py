@@ -8,7 +8,6 @@ import geopandas as gpd
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from shapely.geometry import GeometryCollection
 from shapely.ops import unary_union
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
@@ -17,7 +16,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPen, QColor, QPainterPath, QPainter
 from PySide6.QtCore import Qt
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 # ---------------------------------------------------------------------
 # Utilities
@@ -37,9 +36,14 @@ def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
     # --- GeoParquet support ---
     if ext in (".parquet", ".geoparquet"):
         try:
-            import pyarrow  # noqa
-        except ImportError:
-            raise ImportError("Reading Parquet requires 'pyarrow'. Install via: pip install pyarrow")
+            import pyarrow
+        except Exception:
+            raise ImportError(
+                "Reading Parquet requires the optional dependency 'pyarrow'.\n"
+                "Install it with:\n"
+                "    pip install 'viewgeom[parquet]'"
+            )
+
         gdf = gpd.read_parquet(path)
 
     # --- Shapefile / GeoJSON / JSON ---
@@ -55,8 +59,8 @@ def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
             if layer:
                 if layer not in available_layers:
                     raise ValueError(f"Layer '{layer}' not found. Available: {available_layers}")
-                print(f"[INFO] Loading GPKG layer: {layer}")
                 gdf = gpd.read_file(path, layer=layer)
+                print(f"[INFO] Loaded GPKG layer: {layer}")
 
             else:
                 default_layer = available_layers[0]
@@ -76,63 +80,27 @@ def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
 
     # --- KML / KMZ ---
     elif ext in (".kml", ".kmz"):
-        print(f"[INFO] Loading {ext.upper()} file")
-
-        from shapely.geometry import LineString, MultiLineString, Polygon, MultiPolygon
-        from shapely.ops import unary_union
-
-        def polygon_to_outline(geom):
-            """Convert any Polygon or MultiPolygon into a boundary LineString or MultiLineString."""
-            try:
-                if geom is None or geom.is_empty:
-                    return None
-                if isinstance(geom, Polygon):
-                    return LineString(geom.exterior.coords)
-                elif isinstance(geom, MultiPolygon):
-                    lines = []
-                    for p in geom.geoms:
-                        if p is None or p.is_empty or not isinstance(p, Polygon):
-                            continue
-                        lines.append(LineString(p.exterior.coords))
-                    if not lines:
-                        return None
-                    if len(lines) == 1:
-                        return lines[0]
-                    return unary_union(lines)  # safely merges into MultiLineString
-                else:
-                    return geom
-            except Exception as e:
-                print(f"[WARN] Skipping invalid polygon: {e}")
-                return None
-
         try:
             # Extract or read the KML
             if ext == ".kml":
                 gdf = gpd.read_file(path, driver="KML")
+
             else:
+                # KMZ: unzip and read the KML inside
                 with zipfile.ZipFile(path, "r") as zf:
                     kml_files = [n for n in zf.namelist() if n.lower().endswith(".kml")]
                     if not kml_files:
                         raise ValueError("No .kml file found inside KMZ archive.")
                     kml_name = kml_files[0]
+
                     tmpdir = tempfile.mkdtemp(prefix="viewgeom_kmz_")
                     extracted_path = zf.extract(kml_name, tmpdir)
                     kml_path = os.path.abspath(extracted_path)
-                    print(f"[DEBUG] Extracted KML → {kml_path}")
+
                 gdf = gpd.read_file(kml_path, driver="KML")
 
-            # Convert polygons → outlines only
-            geom_before = gdf.geom_type.unique().tolist()
-            gdf["geometry"] = gdf.geometry.apply(polygon_to_outline)
-
-            # Keep only valid line geometries
+            # Keep valid geometries only
             gdf = gdf[gdf.geometry.notnull() & gdf.geometry.is_valid]
-            gdf = gdf[gdf.geom_type.isin(["LineString", "MultiLineString"])]
-
-            geom_after = gdf.geom_type.unique().tolist()
-            print(f"[INFO] Converted polygons to outlines (before: {geom_before}, after: {geom_after})")
-            print(f"[INFO] KML/KMZ loaded successfully with {len(gdf):,} features")
-            return gdf
 
         except Exception as e:
             raise RuntimeError(f"Failed to load KML/KMZ file: {e}")
@@ -150,10 +118,36 @@ def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
         gdf["geometry"] = gdf.geometry.apply(flatten_geometry)
         gdf = gdf[gdf.geometry.notnull()]
 
-    # --- Limit features for very large sets ---
+    # --- Limit features for very large or very dense sets ---
     n = len(gdf)
-    if n > limit:
+    large_threshold = 100_000
+
+    minx, miny, maxx, maxy = gdf.total_bounds
+    area = max((maxx - minx) * (maxy - miny), 1e-12)
+    density = n / area
+
+    dense_threshold = 300_000
+    dense_limit = 1_000
+
+    # 1. Automatic density-based sampling
+    if density > dense_threshold:
+        print(
+            f"[WARN] Extremely dense dataset: n={n:,}, area={area:.6f} deg² \n"
+            f"[INFO] Sampling down to {dense_limit:,} features" #, density={density:,.0f} features/unit²)"
+        )
+        # print(f"[WARN] Density-based sampling → {dense_limit:,} features")
+        gdf = gdf.sample(dense_limit, random_state=42)
+        n = len(gdf)
+
+    # 2. Automatic large-dataset rule
+    if n > large_threshold:
         print(f"[WARN] Large dataset ({n:,} features) — sampling {limit:,}")
+        gdf = gdf.sample(limit, random_state=42)
+        n = len(gdf)
+
+    # 3. Final user limit fallback (for cases where limit < large_threshold)
+    if n > limit:
+        print(f"[INFO] User-specified limit → sampling down to {limit:,} features")
         gdf = gdf.sample(limit, random_state=42)
 
     # --- Simplify large, complex polygons ---
@@ -189,10 +183,15 @@ def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
     return gdf
 
 # ---------------------------------------------------------------------
-# Color mapping (numeric only)
+# Color mapping
 # ---------------------------------------------------------------------
 def get_color_mapping(gdf, column, cmap_name="viridis"):
+    # If no column selected → no colors
+    if column is None:
+        return [None] * len(gdf), None
+    
     series = gdf[column].dropna()
+
     if pd.api.types.is_numeric_dtype(series):
         pmin, pmax = np.percentile(series, [5, 95])
         if abs(pmax - pmin) < 1e-9:
@@ -203,9 +202,40 @@ def get_color_mapping(gdf, column, cmap_name="viridis"):
         cmap = plt.get_cmap(cmap_name)
         norm = plt.Normalize(vmin=vmin, vmax=vmax)
         colors = series.map(lambda x: cmap(norm(x)))
-    else:
-        colors = ["yellow"] * len(gdf)
+        
+        return colors, (vmin, vmax, pmin, pmax)
+
+    # Fallback for columns that are neither numeric nor categorical:
+    colors = [None] * len(gdf)
     return colors, None
+
+def is_categorical(series):
+    # Explicit pandas CategoricalDtype
+    if isinstance(series.dtype, pd.CategoricalDtype):
+        return True
+
+    # Strings / object columns are categorical
+    if pd.api.types.is_object_dtype(series):
+        return True
+
+    # DO NOT treat integer/float as categorical
+    if pd.api.types.is_numeric_dtype(series):
+        return False
+
+    # Fallback: treat booleans as categorical
+    if pd.api.types.is_bool_dtype(series):
+        return True
+
+    return False
+
+def categorical_colors(series):
+    unique_vals = sorted(series.dropna().unique())
+    cmap = plt.get_cmap("tab20", len(unique_vals))
+
+    color_map = {
+        val: cmap(i) for i, val in enumerate(unique_vals)
+    }
+    return color_map
 
 # ---------------------------------------------------------------------
 # Graphics view (zoom/pan)
@@ -231,11 +261,12 @@ class VectorView(QGraphicsView):
 # Viewer
 # ---------------------------------------------------------------------
 class VectorViewer(QMainWindow):
-    def __init__(self, path, column=None, limit=100_000, simplify=0.01, layer=None):
+    def __init__(self, path, column=None, limit=100_000, simplify=0.01, layer=None, point_size=None):
         super().__init__()
         # print(f"[INFO] Loading {path}")
         self.path = path
-        self.layer = layer  
+        self.layer = layer
+        self.user_point_size = point_size  
 
         # --- Handle simplify argument ---
         if isinstance(simplify, str) and simplify.lower() == "off":
@@ -253,18 +284,33 @@ class VectorViewer(QMainWindow):
         self.gdf = load_vector_any(path, layer, limit, self.simplify)
 
         minx, miny, maxx, maxy = self.gdf.total_bounds
-        extent = max(maxx - minx, maxy - miny)
-        self.point_size = max(1.5, min(6, extent * 0.001))
+
+        if self.user_point_size is not None:
+            # explicit override from CLI
+            self.point_size = float(self.user_point_size)
+        else:
+            # the default setting
+            extent = max(maxx - minx, maxy - miny)
+            self.point_size = max(1.5, min(6, extent * 0.001))
+
+        # Only show point size when dataset actually contains points
+        geom_types = set(self.gdf.geom_type.unique())
+        if "Point" in geom_types or "MultiPoint" in geom_types:
+            print(f"[INFO] Point size: {self.point_size}")
 
         self.colormaps = [
             "plasma",    # default continuous
             "turbo",     # bold, web-mapping look
             "cividis",   # accessible & balanced
             "Spectral",  # diverging / strong variation
-            "tab10"      # categorical mode fallback
+            "tab10"      # categorical
         ]
 
         self.cmap_index = 0
+
+        # Different colormaps for categorical columns
+        self.cat_colormaps = ["tab20", "Set3", "Accent"]
+        self.cat_cmap_index = 0
 
         self.scene = QGraphicsScene(self)
         self.view = VectorView(self.scene)
@@ -273,54 +319,122 @@ class VectorViewer(QMainWindow):
         self.basemap_items = []
         self.feature_items = []
 
-        # ---- Load global basemap ----
-        self._load_basemap()
+        # Basemap will be loaded later depending on numeric columns
+        self.base_gdf = None
 
         # ---- Skip numeric column selection for line geometries ----
         if all(gt in ("LineString", "MultiLineString") for gt in self.gdf.geom_type.unique()):
             self.color_col = None
-            print("[INFO] Detected line-only dataset — skipping color-by-column.")
+            print("[INFO] Outlines only")
         else:
-            # ---- Numeric column selection ----
+            # ---- Detect numeric and categorical columns ----
             num_cols = [c for c in self.gdf.columns if self.gdf[c].dtype.kind in "if"]
-            if not num_cols:
-                # print("[WARN] No numeric columns found — using uniform color.")
-                self.color_col = None
+            cat_cols = [c for c in self.gdf.columns if is_categorical(self.gdf[c])]
+
+            self.num_cols = num_cols
+            self.cat_cols = cat_cols
+
+            # unified ordered list
+            all_cols = num_cols + cat_cols
+            self.all_cols = all_cols
+
+            self._has_numeric_cols = len(num_cols) > 0
+
+            # If user specified a column and it exists
+            if column and (column in num_cols or column in cat_cols):
+                self.color_col = column
+                print(f"[INFO] Coloring by: {self.color_col}")
+
             else:
-                if column and column in num_cols:
-                    self.color_col = column
+                print("[INFO] Available columns:")
+                for i, c in enumerate(all_cols):
+                    dtype = "numeric" if c in num_cols else "categorical"
+                    print(f"  [{i}] {c}   ({dtype})")
+
+                choice = input("Select column index or 'x' for outlines only: ").strip().lower()
+
+                if choice == "x":
+                    print("[INFO] Outlines only.")
+                    self.color_col = None
+
                 else:
-                    print("[INFO] Numeric columns detected:")
-                    for i, c in enumerate(num_cols):
-                        print(f"  [{i}] {c}")
-                    choice = input("Select column index: ").strip()
                     try:
                         idx = int(choice)
-                        self.color_col = num_cols[idx]
+                        if idx < len(all_cols):
+                            self.color_col = all_cols[idx]
+                            print(f"[INFO] Coloring by: {self.color_col}")
+                        else:
+                            print("[WARN] Invalid index — outlines only.")
+                            self.color_col = None
+
                     except Exception:
-                        print("[INFO] Invalid selection, using first column.")
-                        self.color_col = num_cols[0]
-                    if self.color_col:
-                        print(f"[INFO] Coloring by: {self.color_col}")
+                        print("[WARN] Invalid selection — outlines only.")
+                        self.color_col = None
+
+        # ---- Basemap behavior ----
+        if getattr(self, "_has_numeric_cols", False):
+            if self.base_gdf is None:
+                self._load_basemap()
+            if self.base_gdf is not None:
+                self._draw_basemap()
+                print("[INFO] Basemap displayed (Press 'B' to remove)")
+        else:
+            print("[INFO] Basemap optional (Press 'B' to add)")
 
         self._update_window_title()
 
         # ---- Color mapping ----
-        if self.color_col:
-            self.gdf["_color"], _ = get_color_mapping(self.gdf, self.color_col)
-        else:
-            self.gdf["_color"] = ["yellow"] * len(self.gdf)
+        if self.color_col is None:
+            self.gdf["_color"] = None
+            stats = None
 
-        # ---- Basemap logic ----
-        if self.color_col:
-            # Automatically load basemap if coloring by numeric data
-            self._load_basemap()
-            self._draw_basemap()
-            print("[INFO] Basemap displayed")
-        else:
-            # Skip basemap by default when only boundaries are shown
-            self.base_gdf = None
-            print("[INFO] Basemap optional (Press 'B' to add)")
+        elif self.color_col in num_cols:
+            # numeric coloring (existing)
+            self.gdf["_color"], stats = get_color_mapping(self.gdf, self.color_col)
+
+        elif self.color_col in self.cat_cols:
+            print(f"[INFO] Using categorical coloring for '{self.color_col}'")
+
+            series = self.gdf[self.color_col]
+            uniques = sorted(series.dropna().unique(), key=lambda x: str(x))
+            n_unique = len(uniques)
+
+            if n_unique <= 5:
+                print(f"[INFO] Categories: {n_unique} total")
+                for val in uniques:
+                    print(f"   • {val!r}")
+            else:
+                print(f"[INFO] Categories: {n_unique} total")
+                print(f"[INFO] Showing first 5 categories:")
+                for val in uniques[:5]:
+                    print(f"   • {val!r}")
+
+            # Assign colors
+            cmap_dict = categorical_colors(self.gdf[self.color_col])
+            self.category_color_map = cmap_dict
+
+            # convert to RGBA tuples
+            self.gdf["_color"] = self.gdf[self.color_col].map(
+                lambda v: cmap_dict.get(v, (0.7, 0.7, 0.7, 1))
+            )
+            stats = None
+
+        if stats:
+            vmin, vmax, _, _ = stats
+
+            col = self.gdf[self.color_col]
+
+            # Valid/missing counts
+            valid_count = col.count()
+            missing_count = col.isna().sum()
+
+            # Dataset min/max (true)
+            data_min = col.min(skipna=True)
+            data_max = col.max(skipna=True)
+
+            print(f"[INFO] Valid values: {valid_count:,}  Missing: {missing_count:,}")
+            print(f"[INFO] Dataset min/max (non-NaN): {data_min:.3f} to {data_max:.3f}")
+            print(f"[INFO] Stretch range (p5–p95, non-NaN): {vmin:.3f} to {vmax:.3f}")
 
         # ---- Draw features ----
         self._draw_geoms()
@@ -328,22 +442,46 @@ class VectorViewer(QMainWindow):
         # ---- Scene extents ----
         minx, miny, maxx, maxy = self.gdf.total_bounds
         self.scene.setSceneRect(minx, -maxy, maxx - minx, maxy - miny)
-        self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        # self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
         self.resize(1000, 800)
+        self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+        QApplication.processEvents()
+        self.initial_transform = self.view.transform()
+        
         print(f"[INFO] Features displayed: {len(self.gdf):,}")
 
     # -----------------------------------------------------------------
     def _load_basemap(self):
+        import requests
+        from io import BytesIO
+
+        url = "https://naturalearth.s3.amazonaws.com/110m_cultural/ne_110m_admin_0_countries.zip"
+
+        print("[INFO] Loading basemap (timeout 3s)...")
+
+        # --- Step 1. Download ONLY (timeout enforced) ---
         try:
-            self.base_gdf = gpd.read_file(
-                "https://naturalearth.s3.amazonaws.com/110m_cultural/ne_110m_admin_0_countries.zip"
-            )
-            if self.base_gdf.crs != self.gdf.crs:
-                self.base_gdf = self.base_gdf.to_crs(self.gdf.crs)
-            # print("[INFO] Basemap loaded")
-        except Exception as e:
-            print(f"[WARN] Could not load basemap: {e}")
+            resp = requests.get(url, timeout=3)
+            resp.raise_for_status()
+        except Exception:
+            print("[WARN] Basemap not loaded (download failed or too slow).")
             self.base_gdf = None
+            return
+
+        # --- Step 2. If download succeeded, then parse ---
+        try:
+            zip_bytes = BytesIO(resp.content)
+            gdf = gpd.read_file(zip_bytes)
+
+            if gdf.crs != self.gdf.crs:
+                gdf = gdf.to_crs(self.gdf.crs)
+
+            self.base_gdf = gdf
+
+        except Exception as e:
+            print(f"[WARN] Basemap not loaded (read or CRS error: {e})")
+            self.base_gdf = None
+            return
 
     def _draw_basemap(self):
         if self.base_gdf is None:
@@ -384,7 +522,6 @@ class VectorViewer(QMainWindow):
             item = QGraphicsPathItem(path)
             item.setPen(pen)
             item.setZValue(-100)
-            # item.setZValue(10)
             self.scene.addItem(item)
             self.basemap_items.append(item)
 
@@ -402,6 +539,7 @@ class VectorViewer(QMainWindow):
             return QColor(220, 220, 220) if brightness < 128 else QColor(60, 60, 60)
 
     def _draw_geoms(self):
+        
         # Remove existing feature items (if tracked)
         for it in getattr(self, "feature_items", []):
             self.scene.removeItem(it)
@@ -411,7 +549,18 @@ class VectorViewer(QMainWindow):
         pen.setWidthF(0.8)
         pen.setCosmetic(True)
 
+        # --- Freeze protection timer ---
+        from PySide6.QtCore import QElapsedTimer
+        timer = QElapsedTimer()
+        timer.start()
+
         for _, row in self.gdf.iterrows():
+
+            # Abort if drawing takes too long
+            if timer.elapsed() > 30000:  # 30 seconds
+                print("[WARN] Drawing aborted (took too long)")
+                return
+
             geom = row.geometry
             if geom is None or geom.is_empty:
                 continue
@@ -421,24 +570,46 @@ class VectorViewer(QMainWindow):
             bg = palette.window().color()
             brightness = (bg.red() * 299 + bg.green() * 587 + bg.blue() * 114) / 1000
 
-            if self.color_col:
-                # Fill color from numeric column
-                color = self._color_for_value(row["_color"])
-                brush = color
+            # Decide brush and pen based on column type
+            if self.color_col in getattr(self, "num_cols", []):
+                # numeric
+                if row["_color"] is None:
+                    brush = Qt.NoBrush
+                else:
+                    color = self._color_for_value(row["_color"])
+                    brush = color
 
-                # Add thin, contrasting edge for better visibility
+                # thin contrasting edge
                 edge_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)
                 pen.setColor(edge_color)
                 pen.setWidthF(0.3)
-            else:
-                # No numeric column: outline only, strong red border
-                if brightness < 128:
-                    color = QColor(255, 80, 80)   # bright red on dark background
+
+            elif self.color_col in getattr(self, "cat_cols", []):
+                # categorical
+                rgba = row["_color"]
+                if rgba is None:
+                    brush = Qt.NoBrush
+                    pen.setColor(QColor(120, 120, 120))
+                    pen.setWidthF(0.6)
                 else:
-                    color = QColor(150, 0, 0)     # deep red on light background
-                brush = Qt.BrushStyle.NoBrush
+                    r, g, b, a = [int(255 * c) for c in rgba]
+                    color = QColor(r, g, b, a)
+                    brush = color
+
+                    pen.setColor(QColor(40, 40, 40))
+                    pen.setWidthF(0.3)
+
+            else:
+                # outlines only mode
+                brush = Qt.NoBrush
+                if brightness < 128:
+                    color = QColor(255, 80, 80)
+                else:
+                    color = QColor(150, 0, 0)
+
                 pen.setColor(color)
                 pen.setWidthF(0.8)
+
 
             geoms = geom.geoms if geom.geom_type.startswith("Multi") else [geom]
             for g in geoms:
@@ -496,27 +667,66 @@ class VectorViewer(QMainWindow):
         self.setWindowTitle(" — ".join(parts))
 
     def _switch_column(self, direction):
-        num_cols = [c for c in self.gdf.columns if self.gdf[c].dtype.kind in "if"]
-        if not num_cols:
-            print("[INFO] No numeric columns available to switch.")
+        # Use the original unified ordering
+        all_cols = self.all_cols
+
+        if not all_cols:
+            print("[INFO] No columns available to switch.")
             return
 
-        # current index
-        idx = num_cols.index(self.color_col) if self.color_col in num_cols else 0
+        # find current index or default to first
+        try:
+            idx = all_cols.index(self.color_col)
+        except ValueError:
+            idx = 0
 
-        # wrap around cycling
-        idx = (idx + direction) % len(num_cols)
-        self.color_col = num_cols[idx]
+        # wrap around
+        idx = (idx + direction) % len(all_cols)
+        self.color_col = all_cols[idx]
         print(f"[INFO] Coloring by: {self.color_col}")
         self._update_window_title()
 
-        # Keep the currently selected colormap
-        cmap_name = self.colormaps[self.cmap_index]
-        self.gdf["_color"], _ = get_color_mapping(self.gdf, self.color_col, cmap_name=cmap_name)
+        # numeric branch
+        if self.color_col in self.num_cols:
+            cmap_name = self.colormaps[self.cmap_index]
+            self.gdf["_color"], stats = get_color_mapping(
+                self.gdf, self.color_col, cmap_name=cmap_name
+            )
 
-        # redraw
+            if stats:
+                vmin, vmax, pmin, pmax = stats
+                print(f"[INFO] Value range: min={vmin:.3f}, max={vmax:.3f}")
+                print(f"[INFO] Percentile stretch: p5={pmin:.3f}, p95={pmax:.3f}")
+
+        # categorical branch
+        else:
+            series = self.gdf[self.color_col]
+            uniques = sorted(series.dropna().unique(), key=lambda x: str(x))
+            n_unique = len(uniques)
+
+            # Show category info (same style as startup)
+            if n_unique <= 5:
+                print(f"[INFO] Categories: {n_unique} total")
+                for val in uniques:
+                    print(f"   • {val!r}")
+            else:
+                print(f"[INFO] Categories: {n_unique} total")
+                print("[INFO] Showing first 5 categories:")
+                for val in uniques[:5]:
+                    print(f"   • {val!r}")
+
+            # Color assignment
+            cmap_name = self.cat_colormaps[self.cat_cmap_index]
+            cmap = plt.get_cmap(cmap_name)
+
+            color_map = {u: cmap(i / max(1, n_unique - 1)) for i, u in enumerate(uniques)}
+
+            self.gdf["_color"] = self.gdf[self.color_col].map(
+                lambda v: color_map.get(v, (0.7, 0.7, 0.7, 1))
+            )
+
         self._draw_geoms()
-        if hasattr(self, "basemap_items") and self.basemap_items:
+        if self.basemap_items:
             self._draw_basemap()
 
     # -----------------------------------------------------------------
@@ -536,15 +746,35 @@ class VectorViewer(QMainWindow):
         elif k in (Qt.Key.Key_Down, Qt.Key.Key_S):
             vsb.setValue(vsb.value() + 50)
         elif k == Qt.Key.Key_M:
-            # Only switch colormap if a numeric color column exists
             if not self.color_col:
                 print("[INFO] Colormap switching disabled (no color-by column).")
                 return
-            self.cmap_index = (self.cmap_index + 1) % len(self.colormaps)
-            cmap_name = self.colormaps[self.cmap_index]
-            print(f"[INFO] Switched colormap to: {cmap_name}")
-            self.gdf["_color"], _ = get_color_mapping(self.gdf, self.color_col, cmap_name=cmap_name)
+
+            # numeric column
+            if self.color_col in self.num_cols:
+                self.cmap_index = (self.cmap_index + 1) % len(self.colormaps)
+                cmap_name = self.colormaps[self.cmap_index]
+                print(f"[INFO] Switched numeric colormap to: {cmap_name}")
+                self.gdf["_color"], _ = get_color_mapping(self.gdf, self.color_col, cmap_name=cmap_name)
+
+            # categorical column
+            elif self.color_col in self.cat_cols:
+                self.cat_cmap_index = (self.cat_cmap_index + 1) % len(self.cat_colormaps)
+                cmap_name = self.cat_colormaps[self.cat_cmap_index]
+                print(f"[INFO] Switched categorical colormap to: {cmap_name}")
+
+                cmap = plt.get_cmap(cmap_name)
+                uniques = sorted(self.gdf[self.color_col].dropna().unique())
+
+                color_map = {u: cmap(i / max(1, len(uniques)-1)) for i, u in enumerate(uniques)}
+
+                # update colors
+                self.gdf["_color"] = self.gdf[self.color_col].map(
+                    lambda v: color_map.get(v, (0.7, 0.7, 0.7, 1))
+                )
+
             self._draw_geoms()
+
         elif k in (Qt.Key.Key_BraceRight, Qt.Key.Key_BracketRight):  # ]
             if self.color_col:
                 self._switch_column(+1)
@@ -559,14 +789,16 @@ class VectorViewer(QMainWindow):
                 self.basemap_items.clear()
                 print("[INFO] Basemap removed")
             else:
-                # Basemap not drawn → load and draw
                 if self.base_gdf is None:
                     self._load_basemap()
-                self._draw_basemap()
-                print("[INFO] Basemap added")
+
+                if self.base_gdf is not None:
+                    self._draw_basemap()
+                    print("[INFO] Basemap displayed")
+
         elif k == Qt.Key.Key_R:
             self.view.resetTransform()
-            self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+            self.view.setTransform(self.initial_transform)
             print("[INFO] Reset view")
         else:
             super().keyPressEvent(ev)
@@ -590,6 +822,11 @@ def main():
         formatter_class=argparse.RawTextHelpFormatter
     )
 
+    parser.add_argument(
+    "--version",
+    action="version",
+    version=f"viewgeom {__version__}"
+    )
     parser.add_argument(
         "path",
         help="Path to vector file"
@@ -616,11 +853,19 @@ def main():
         default="0.01",           # keep the same default, but as a string
         help="Simplify tolerance for polygons/lines; number like '0.01' or 'off' to disable"
     )
+    parser.add_argument(
+    "--point-size",
+    type=float,
+    default=None,
+    help="Point size in pixels (overrides automatic sizing)"
+    )
 
     args = parser.parse_args()
 
+    default_limit = 100_000
+
     app = QApplication(sys.argv)
-    win = VectorViewer(args.path, args.column, args.limit, args.simplify, args.layer)
+    win = VectorViewer(args.path, args.column, args.limit, args.simplify, args.layer,point_size=args.point_size)
     win.show()
     app.processEvents()
     win.raise_()
@@ -629,4 +874,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ImportError as e:
+        print(f"[ERROR] {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"[ERROR] Unexpected error: {e}")
+        sys.exit(1)
