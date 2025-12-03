@@ -112,7 +112,6 @@ viewgeom earthquake.geojson --duckdb "SELECT mag FROM data WHERE mag > 5" --save
 - DuckDB SQL support is now available with `--duckdb`, allowing you to query any vector dataset using SQL. It works with .shp, .geojson, .gpkg, .parquet, .geoparquet, .kml, and .kmz, and supports column selection, filtering, ordering, and numeric expressions (current limitations: only one dataset at a time, and no spatial queries yet). For more information, please see [DuckDB SQL Support](duckdb.md).
 - The `--filter` option evaluates expressions using pandas query syntax. It is a lightweight alternative to SQL for simple filtering.
 - The `--qgis` export option lets you send filtered results directly to QGIS. A temporary .gpkg file is generated, and QGIS opens automatically on macOS, Linux, and Windows.
-- The `--filter` option evaluates expressions using pandas query syntax, offering an additional, efficient way to filter attributes without SQL.
 - FileGDB (.gdb) is now supported. Use `--layer` to select one if it contains multiple layers.
 - You can save outputs with `--save`. The file format is determined by the filename you provide (e.g., `--save filtered.json`, `--save result.shp`, or `--save subset.gpkg`). Saving to KML or KMZ is disabled because the OGR KML driver (used through pyogrio) does not preserve attribute fields. FileGDB export is also disabled, since full write support requires the proprietary ESRI FileGDB driver. Please use GeoPackage, GeoJSON, JSON, Shapefile, or Parquet for complete attribute export.
 
