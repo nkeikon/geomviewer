@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-viewgeom — Interactive viewer for vector datasets (.shp, .geojson, .gpkg, .parquet, .geoparquet, .kml, .kmz)
+viewgeom — Interactive viewer for vector datasets (.shp, .geojson, .gpkg, .parquet, .geoparquet, .gdb, .kml, .kmz)
 """
 
-import sys, os, zipfile, tempfile
+import sys, os, zipfile, tempfile, uuid, re
 import geopandas as gpd
 import pandas as pd
 import numpy as np
@@ -11,16 +11,101 @@ import matplotlib.pyplot as plt
 from shapely.ops import unary_union
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
-    QGraphicsPathItem, QGraphicsEllipseItem, QStatusBar, QScrollBar
+    QGraphicsPathItem, QGraphicsEllipseItem, QStatusBar
 )
 from PySide6.QtGui import QPen, QColor, QPainterPath, QPainter
 from PySide6.QtCore import Qt
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
-# ---------------------------------------------------------------------
+# ---------------------------------------------------------
+# Helper: extract short tag from user's SQL input to QGIS
+# ---------------------------------------------------------
+def short_tag(expr):
+    if not expr:
+        return ""
+
+    # first quoted string
+    m = re.search(r"'([^']+)'", expr)
+    if m:
+        return m.group(1).strip().replace(" ", "_")
+
+    # first number
+    m = re.search(r"\d+\.?\d*", expr)
+    if m:
+        return m.group(0)
+
+    # fallback: first 8 alphanumerics
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", expr).strip("_")
+    return safe[:8] if safe else ""
+
+# -------------------------------------------------------------
+# Save outputs
+# -------------------------------------------------------------
+import zipfile
+
+def save_output(gdf, path):
+    """
+    Save GeoDataFrame to various formats.
+    Supported: .gpkg, .shp, .geojson, .json, .kml, .kmz
+    """
+
+    ext = os.path.splitext(path)[1].lower()
+
+    # GeoPackage
+    if ext == ".gpkg":
+        gdf.to_file(path, driver="GPKG")
+        cols = [c for c in gdf.columns if c != "geometry"] + ["geometry"]
+        print(f"[INFO] Final columns ({len(cols)}):")
+        for c in cols:
+            print(f"   • {c}")
+        print(f"[INFO] Saved to {path}")
+        return
+
+    # Shapefile
+    if ext == ".shp":
+        gdf.to_file(path, driver="ESRI Shapefile")
+        cols = [c for c in gdf.columns if c != "geometry"] + ["geometry"]
+        print(f"[INFO] Final columns ({len(cols)}):")
+        for c in cols:
+            print(f"   • {c}")
+        print(f"[INFO] Saved to {path}")
+        return
+
+    # GeoJSON or JSON
+    if ext in (".geojson", ".json"):
+        gdf.to_file(path, driver="GeoJSON")
+        cols = [c for c in gdf.columns if c != "geometry"] + ["geometry"]
+        print(f"[INFO] Final columns ({len(cols)}):")
+        for c in cols:
+            print(f"   • {c}")
+        print(f"[INFO] Saved to {path}")           
+        return
+
+    # KML
+    if ext == ".kml":
+        print("[ERROR] Saving to .kml is disabled. The KML driver does not preserve attributes.")
+        print("[INFO] Please save as .gpkg, .geojson, .json, .shp, or .parquet instead.")
+        return
+
+    # KMZ
+    if ext == ".kmz":
+        print("[ERROR] Saving to .kmz is disabled. The KML/KMZ driver does not preserve attributes.")
+        print("[INFO] Please save as .gpkg, .geojson, .json, .shp, or .parquet instead.")
+        return
+
+    print(f"[ERROR] Unsupported output format: {ext}")
+    print("Supported: .gpkg, .shp, .geojson, .json, .kml, .kmz")
+
+    # FileGDB save blocked
+    if ext == ".gdb":
+        print("[ERROR] Saving to .gdb is not supported. FileGDB write access requires the proprietary ESRI FileGDB driver.")
+        print("[INFO] Please save as .gpkg, .geojson, .json, or .shp instead.")
+        return
+    
+# ------------------------------------------------------------------
 # Utilities
-# ---------------------------------------------------------------------
+# ------------------------------------------------------------------
 def flatten_geometry(geom):
     if geom is None or geom.is_empty:
         return None
@@ -30,7 +115,7 @@ def flatten_geometry(geom):
     return geom
 
 
-def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
+def load_vector_any(path, layer=None, limit=100_000, simplify=0.01, filter_expr=None, duckdb_sql=None):
     ext = os.path.splitext(path)[1].lower()
 
     # --- GeoParquet support ---
@@ -45,10 +130,20 @@ def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
             )
 
         gdf = gpd.read_parquet(path)
+        gdf = gdf.reset_index(drop=True)   # necessary to remove the index for matching to use the correct index
+
+        # Ensure the geometry column is always named "geometry" and active
+        geom_col = gdf.geometry.name
+        if geom_col != "geometry":
+            gdf = gdf.rename(columns={geom_col: "geometry"}).set_geometry("geometry")
+        else:
+            # even if already named "geometry", ensure it's active
+            gdf = gdf.set_geometry("geometry")
 
     # --- Shapefile / GeoJSON / JSON ---
     elif ext in (".shp", ".geojson", ".json"):
         gdf = gpd.read_file(path)
+        gdf = gdf.reset_index(drop=True)
 
     # --- GeoPackage ---
     elif ext == ".gpkg":
@@ -60,11 +155,13 @@ def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
                 if layer not in available_layers:
                     raise ValueError(f"Layer '{layer}' not found. Available: {available_layers}")
                 gdf = gpd.read_file(path, layer=layer)
+                gdf = gdf.reset_index(drop=True)
                 print(f"[INFO] Loaded GPKG layer: {layer}")
 
             else:
                 default_layer = available_layers[0]
                 gdf = gpd.read_file(path, layer=default_layer)
+                gdf = gdf.reset_index(drop=True)
                 print(f"[INFO] Loaded GPKG layer: {default_layer}")
                 layer = default_layer
 
@@ -84,7 +181,7 @@ def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
             # Extract or read the KML
             if ext == ".kml":
                 gdf = gpd.read_file(path, driver="KML")
-
+                gdf = gdf.reset_index(drop=True)
             else:
                 # KMZ: unzip and read the KML inside
                 with zipfile.ZipFile(path, "r") as zf:
@@ -98,12 +195,171 @@ def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
                     kml_path = os.path.abspath(extracted_path)
 
                 gdf = gpd.read_file(kml_path, driver="KML")
+                gdf = gdf.reset_index(drop=True)
 
             # Keep valid geometries only
             gdf = gdf[gdf.geometry.notnull() & gdf.geometry.is_valid]
 
         except Exception as e:
             raise RuntimeError(f"Failed to load KML/KMZ file: {e}")
+
+    # --- FileGDB (.gdb) support via pyogrio ---
+    elif ext == ".gdb":
+        try:
+            import pyogrio
+            import warnings
+
+            # Try normal layer listing
+            try:
+                layers = [name for name, _ in pyogrio.list_layers(path)]
+            except Exception:
+                # Try OpenFileGDB prefix
+                try:
+                    layers = [name for name, _ in pyogrio.list_layers(f"OpenFileGDB:{path}")]
+                    path = f"OpenFileGDB:{path}"
+                except Exception:
+                    raise RuntimeError(
+                        "FileGDB vector data could not be loaded. Inspect the file.\n"
+                    )
+
+            # No readable vector layers found at all
+            if not layers:
+                raise RuntimeError(
+                    "No vector layer was found.\n"
+                )
+
+            # User selected a specific layer
+            if layer:
+                if layer not in layers:
+                    raise ValueError(f"Layer '{layer}' not found. Available: {layers}")
+                print(f"[INFO] Loaded GDB layer: {layer}")
+
+                with warnings.catch_warnings(record=True) as wlist:
+                    warnings.simplefilter("always", RuntimeWarning)
+                    gdf = gpd.read_file(path, layer=layer)
+                    gdf = gdf.reset_index(drop=True)
+
+                for w in wlist:
+                    if "organizePolygons" in str(w.message):
+                        print("[INFO] Detected very complex polygons with many parts.")
+                        print("[INFO] Loading may take longer for large multi part polygons.")
+                        break
+
+            # No layer specified
+            else:
+                default_layer = layers[0]
+                print(f"[INFO] Loaded GDB layer: {default_layer}")
+
+                with warnings.catch_warnings(record=True) as wlist:
+                    warnings.simplefilter("always", RuntimeWarning)
+                    gdf = gpd.read_file(path, layer=default_layer)
+                    gdf = gdf.reset_index(drop=True)
+
+                for w in wlist:
+                    if "organizePolygons" in str(w.message):
+                        print("[INFO] Detected very complex polygons with many parts.")
+                        print("[INFO] Loading may take longer for large multi part polygons.")
+                        break
+
+                if len(layers) > 1:
+                    print("[INFO] Other layers available:")
+                    for name in layers[1:]:
+                        print(f"   • {name}")
+                    print("Use: --layer <name> to load a different one")
+
+        except ImportError:
+            raise ImportError(
+                "FileGDB support requires the optional dependency 'pyogrio'.\n"
+                "Install it with:\n"
+                "    pip install pyogrio"
+            )
+
+
+    # Apply filter if requested
+    if filter_expr:
+        try:
+            before = len(gdf)
+            gdf = gdf.query(filter_expr)
+            print(f"[INFO] Applied filter: {filter_expr}")
+            print(f"[INFO] Filtered features: {len(gdf):,} / {before:,}")
+            if len(gdf) == 0:
+                print("[WARN] No features match the filter.")
+            # avoid SettingWithCopyWarning for downstream geometry edits
+            gdf = gdf.copy()
+        except Exception as e:
+            print(f"[ERROR] Filter failed: {e}")
+            sys.exit(1)
+
+    # -----------------------------------------------------------------
+    # DuckDB filtering (attribute-only, no spatial)
+    # -----------------------------------------------------------------
+    if duckdb_sql:
+
+        # Try-import DuckDB; guide user if missing
+        try:
+            import duckdb
+        except ImportError:
+            print("[ERROR] DuckDB is required for --duckdb but is not installed.")
+            print("Install it with:")
+            print("    pip install duckdb")
+            sys.exit(1)
+
+        print("[INFO] Running DuckDB SQL...")
+
+        # below will identify a geometry column regardless of the name
+        geom_col = gdf.geometry.name
+
+        # drop geometry and match later with ID
+        df_no_geom = gdf.drop(columns=[geom_col]).copy()
+        df_no_geom.insert(0, "_rowid", range(len(df_no_geom)))
+
+        con = duckdb.connect()
+        con.register("data", df_no_geom)
+
+        # --- Rewrite SQL so _rowid is ALWAYS selected ---
+        sql = duckdb_sql.strip()
+
+        # If user did SELECT *, leave it alone (it will include _rowid)
+        if sql.lower().startswith("select *"):
+            final_sql = sql
+        else:
+            # Inject _rowid into the projection list
+            if sql.lower().startswith("select"):
+                final_sql = "SELECT _rowid, " + sql[6:].lstrip()
+            else:
+                print("[ERROR] DuckDB SQL must start with SELECT")
+                sys.exit(1)
+
+        # --- Execute rewritten SQL ---
+        try:
+            df_sql = con.execute(final_sql).df()
+        except Exception as e:
+            print(f"[ERROR] DuckDB query failed: {e}")
+            sys.exit(1)
+
+        if df_sql.empty:
+            print("[WARN] DuckDB returned zero rows")
+            return gdf.iloc[0:0].copy()
+
+        if "_rowid" not in df_sql.columns:
+            print("[ERROR] DuckDB did not return _rowid (unexpected).")
+            print(f"[DEBUG] Columns: {df_sql.columns.tolist()}")
+            sys.exit(1)
+
+        # --- Create new GeoDataFrame from DuckDB output + original geometry ---
+        # Step 1: Use _rowid to extract geometry in correct order
+        keep = df_sql["_rowid"].tolist()
+        geom = gdf.loc[keep, "geometry"].reset_index(drop=True)
+
+        # Step 2: Drop _rowid from SQL output, keep all other columns (including new ones)
+        df_sql = df_sql.drop(columns=["_rowid"]).reset_index(drop=True)
+
+        # Step 3: Build final GeoDataFrame from DuckDB output + geometry
+        gdf = gpd.GeoDataFrame(df_sql, geometry=geom, crs=gdf.crs)
+
+        total = len(df_no_geom)
+        filtered = len(gdf)
+        print(f"[INFO] DuckDB filtered rows: {filtered:,} / {total:,}")
 
     # --- CRS handling ---
     if gdf.crs is None:
@@ -118,37 +374,63 @@ def load_vector_any(path, layer=None, limit=100_000, simplify=0.01):
         gdf["geometry"] = gdf.geometry.apply(flatten_geometry)
         gdf = gdf[gdf.geometry.notnull()]
 
+    # --- User override: disable all sampling with --limit 0 ---
+    user_disable_sampling = (limit == 0)
+    if not user_disable_sampling:
+
     # --- Limit features for very large or very dense sets ---
-    n = len(gdf)
-    large_threshold = 100_000
-
-    minx, miny, maxx, maxy = gdf.total_bounds
-    area = max((maxx - minx) * (maxy - miny), 1e-12)
-    density = n / area
-
-    dense_threshold = 300_000
-    dense_limit = 1_000
-
-    # 1. Automatic density-based sampling
-    if density > dense_threshold:
-        print(
-            f"[WARN] Extremely dense dataset: n={n:,}, area={area:.6f} deg² \n"
-            f"[INFO] Sampling down to {dense_limit:,} features" #, density={density:,.0f} features/unit²)"
-        )
-        # print(f"[WARN] Density-based sampling → {dense_limit:,} features")
-        gdf = gdf.sample(dense_limit, random_state=42)
         n = len(gdf)
+        large_threshold = 100_000
 
-    # 2. Automatic large-dataset rule
-    if n > large_threshold:
-        print(f"[WARN] Large dataset ({n:,} features) — sampling {limit:,}")
-        gdf = gdf.sample(limit, random_state=42)
-        n = len(gdf)
+        minx, miny, maxx, maxy = gdf.total_bounds
+        area = (maxx - minx) * (maxy - miny)
 
-    # 3. Final user limit fallback (for cases where limit < large_threshold)
-    if n > limit:
-        print(f"[INFO] User-specified limit → sampling down to {limit:,} features")
-        gdf = gdf.sample(limit, random_state=42)
+        # Avoid zero area causing infinite density
+        if area <= 0:
+            area = 1e-12
+
+        density = n / area
+
+        dense_threshold = 300_000     
+        dense_limit = 1_000           # very conservative
+        sample_limit = dense_limit    # alias used below
+
+        # Decide if sampling is needed
+        if n <= sample_limit:
+            sampling_needed = False
+
+        elif area <= 1e-12:
+            # tiny or zero area, skip sampling
+            sampling_needed = False
+
+        else:
+            sampling_needed = density > dense_threshold
+
+        # Apply sampling
+        if sampling_needed:
+            print(
+                f"[WARN] Extremely dense dataset: n={n:,}, area={area:.6f} deg²"
+            )
+            print(
+                f"[INFO] Sampling down to {dense_limit:,} features"
+            )
+
+            # Cap sample size to avoid errors
+            sample_size = min(dense_limit, n)
+
+            gdf = gdf.sample(sample_size, random_state=42)
+            n = len(gdf)
+
+        # 2. Automatic large-dataset rule
+        if n > large_threshold:
+            print(f"[WARN] Large dataset ({n:,} features) — sampling {limit:,}")
+            gdf = gdf.sample(limit, random_state=42)
+            n = len(gdf)
+
+        # 3. Final user limit fallback (for cases where limit < large_threshold)
+        if n > limit:
+            print(f"[INFO] User-specified limit → sampling down to {limit:,} features")
+            gdf = gdf.sample(limit, random_state=42)
 
     # --- Simplify large, complex polygons ---
     geom_type = gdf.geom_type.mode()[0]
@@ -193,6 +475,12 @@ def get_color_mapping(gdf, column, cmap_name="viridis"):
     series = gdf[column].dropna()
 
     if pd.api.types.is_numeric_dtype(series):
+        # detect columns with all NaN
+        if series.isna().all():
+            print(f"[WARN] Column '{column}' has no numeric values. Showing outlines only.")
+            return [None] * len(gdf), None
+
+        # Normal numeric pipeline
         pmin, pmax = np.percentile(series, [5, 95])
         if abs(pmax - pmin) < 1e-9:
             vmin, vmax = series.min(), series.max()
@@ -261,7 +549,7 @@ class VectorView(QGraphicsView):
 # Viewer
 # ---------------------------------------------------------------------
 class VectorViewer(QMainWindow):
-    def __init__(self, path, column=None, limit=100_000, simplify=0.01, layer=None, point_size=None):
+    def __init__(self, path, column=None, limit=100_000, simplify=0.01, layer=None, point_size=None, filter_expr=None, duckdb_sql=None):
         super().__init__()
         # print(f"[INFO] Loading {path}")
         self.path = path
@@ -280,8 +568,8 @@ class VectorViewer(QMainWindow):
 
         self.simplify = simplify
 
-        # Load vector *after* simplify normalization
-        self.gdf = load_vector_any(path, layer, limit, self.simplify)
+        # Load vector after simplified
+        self.gdf = load_vector_any(path, layer, limit, self.simplify, filter_expr=filter_expr, duckdb_sql=duckdb_sql)
 
         minx, miny, maxx, maxy = self.gdf.total_bounds
 
@@ -319,7 +607,7 @@ class VectorViewer(QMainWindow):
         self.basemap_items = []
         self.feature_items = []
 
-        # Basemap will be loaded later depending on numeric columns
+        # Basemap will be loaded later depending on column or geometry types
         self.base_gdf = None
 
         # ---- Skip numeric column selection for line geometries ----
@@ -395,8 +683,15 @@ class VectorViewer(QMainWindow):
         elif self.color_col in self.cat_cols:
             print(f"[INFO] Using categorical coloring for '{self.color_col}'")
 
+            # series = self.gdf[self.color_col]
+            # uniques = sorted(series.dropna().unique(), key=lambda x: str(x))
+            # n_unique = len(uniques)
+
             series = self.gdf[self.color_col]
-            uniques = sorted(series.dropna().unique(), key=lambda x: str(x))
+
+            # Preserve order of appearance instead of alphabetical
+            # (DuckDB already sorted the rows)
+            uniques = list(dict.fromkeys(series.dropna()))
             n_unique = len(uniques)
 
             if n_unique <= 5:
@@ -834,7 +1129,7 @@ def main():
     parser.add_argument(
         "--column",
         type=str,
-        help="Numeric column name to color by"
+        help="Column name to color by"
     )
     parser.add_argument(
         "--layer",
@@ -859,13 +1154,134 @@ def main():
     default=None,
     help="Point size in pixels (overrides automatic sizing)"
     )
+    parser.add_argument(
+    "--filter",
+    type=str,
+    help="Filter features using pandas query syntax. Example: \"value > 0.4 and landcover == 'forest'\""
+    )
+    parser.add_argument(
+        "--duckdb",
+        type=str,
+        help="Filter using DuckDB SQL over attributes (no spatial). Example: \"SELECT * FROM data WHERE col > 5\""
+    )
+    parser.add_argument(
+        "--save",
+        type=str,
+        help="Save the final dataset to a file (e.g. filtered.json)."
+    )
+    parser.add_argument(
+        "--qgis",
+        action="store_true",
+        help="Open filtered results in QGIS"
+    )
 
     args = parser.parse_args()
+    global qgis_flag
+    qgis_flag = args.qgis
 
-    default_limit = 100_000
+    # If --qgis or --save: run DuckDB, export, then exit
+    if args.qgis or args.save:
 
+        gdf = load_vector_any(
+            args.path,
+            layer=args.layer,
+            limit=args.limit,
+            simplify=args.simplify,
+            filter_expr=args.filter,
+            duckdb_sql=args.duckdb
+        )
+
+        # Handle --save
+        if args.save:
+            save_output(gdf, args.save)
+            return
+
+        # Handle --qgis
+        base = os.path.splitext(os.path.basename(args.path))[0]
+        base = re.sub(r"[^A-Za-z0-9_-]+", "_", base)
+        base = base[:8]
+
+        expr = args.duckdb or args.filter or ""
+        tag = short_tag(expr)
+        tag_part = f"_{tag}" if tag else ""
+
+        random_part = uuid.uuid4().hex[:6]
+
+        tmp = os.path.join(
+            tempfile.gettempdir(),
+            f"{base}{tag_part}_{random_part}.gpkg"
+        )
+
+        gdf.to_file(tmp, driver="GPKG")
+        print(f"[INFO] Exported filtered dataset to: {tmp}")
+
+        launched = False
+
+        if sys.platform == "darwin":
+            candidates = [
+                "/Applications/QGIS.app",
+                "/Applications/QGIS-LTR.app",
+            ]
+            for app in candidates:
+                if os.path.exists(app):
+                    os.system(f'open -a "{app}" "{tmp}"')
+                    launched = True
+                    break
+
+        # unable to test below, waiting for user feedback
+        elif sys.platform.startswith("win"):
+            candidates = [
+                r"C:\Program Files\QGIS 3.34.0\bin\qgis-bin.exe",
+                r"C:\Program Files\QGIS 3.32.0\bin\qgis-bin.exe",
+                r"C:\OSGeo4W64\bin\qgis-bin.exe",
+            ]
+            for exe in candidates:
+                if os.path.exists(exe):
+                    os.system(f'"{exe}" "{tmp}"')
+                    launched = True
+                    break
+
+            if not launched:
+                try:
+                    os.system(f'qgis "{tmp}"')
+                    launched = True
+                except Exception:
+                    pass
+
+        else:
+            try:
+                ret = os.system(f'qgis "{tmp}"')
+                if ret == 0:
+                    launched = True
+            except:
+                pass
+
+            if not launched:
+                linux_candidates = [
+                    "/usr/bin/qgis",
+                    "/usr/local/bin/qgis",
+                    "/snap/bin/qgis",
+                ]
+                for exe in linux_candidates:
+                    if os.path.exists(exe):
+                        os.system(f'"{exe}" "{tmp}"')
+                        launched = True
+                        break
+
+        if not launched:
+            print("[WARN] QGIS not found automatically.")
+            print("[INFO] Open manually:")
+            print(f"       {tmp}")
+
+        print("[INFO] --qgis used, skipping viewer.")
+        return
+
+    # Normal viewer path
     app = QApplication(sys.argv)
-    win = VectorViewer(args.path, args.column, args.limit, args.simplify, args.layer,point_size=args.point_size)
+    win = VectorViewer(
+        args.path, args.column, args.limit, args.simplify, args.layer,
+        point_size=args.point_size, filter_expr=args.filter, duckdb_sql=args.duckdb
+    )
     win.show()
     app.processEvents()
     win.raise_()
