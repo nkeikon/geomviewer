@@ -20,14 +20,6 @@ It automatically detects layers and columns and allows switching visualization c
 
 **Saving to KML, KMZ, or FileGDB is not supported. Please use GeoPackage, GeoJSON, JSON, Shapefile, or Parquet for full attribute export (see "Update in v0.1.4").*
 
-## Need help?
-
-You can ask questions about usage via the documentation-based assistant:
-
-👉 [Ask the viewtif + viewgeom + viewinline Helper](https://chatgpt.com/g/g-698b61c42f788191b884aed1b99dfcd8-viewtif-viewgeom-viewinline-helper)
-
-👉 For NASA staff: find 'viewtif + viewgeom + viewinline Helper' via the ChatGSFC Agent Marketplace
-
 ## Installation
 ```bash
 pip install viewgeom
@@ -122,6 +114,9 @@ viewgeom earthquake.geojson --duckdb "SELECT mag FROM data WHERE mag > 5" --save
 - The `--qgis` export option lets you send filtered results directly to QGIS. A temporary .gpkg file is generated, and QGIS opens automatically on macOS, Linux, and Windows.
 - FileGDB (.gdb) is now supported. Use `--layer` to select one if it contains multiple layers.
 - You can save outputs with `--save`. The file format is determined by the filename you provide (e.g., `--save filtered.json`, `--save result.shp`, or `--save subset.gpkg`). Saving to KML or KMZ is disabled because the OGR KML driver (used through pyogrio) does not preserve attribute fields. FileGDB export is also disabled, since full write support requires the proprietary ESRI FileGDB driver. Please use GeoPackage, GeoJSON, JSON, Shapefile, or Parquet for complete attribute export.
+
+## Need help?
+NASA staff can ask questions about usage via the documentation-based assistant 'viewtif + viewgeom + viewinline Helper' via the ChatGSFC Agent Marketplace.
 
 ## Credit & License
 `viewgeom`, which followed from `viewtif`, was inspired by the NASA JPL Thermal Viewer — Semi-Automated Georeferencer (GeoViewer v1.12) developed by Jake Longenecker (University of Miami Rosenstiel School of Marine, Atmospheric & Earth Science) while at the NASA Jet Propulsion Laboratory, California Institute of Technology, with inspiration from JPL’s ECOSTRESS geolocation batch workflow by Andrew Alamillo. The original GeoViewer was released under the MIT License (2025) and may be freely adapted with citation.
