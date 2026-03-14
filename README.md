@@ -8,13 +8,21 @@ Quick viewer for vector datasets from the command line.
   <img src="viewgeom_gif1.gif" width="100%">
 </p>
 
-<p align="center">
-  <img src="viewgeom_gif2.gif" width="49%">
-  <img src="viewgeom_gif_db.gif" width="49%">
-  <br>
-  <em>Numerical and Categorical Columns</em> &nbsp;&nbsp;&nbsp;&nbsp;
-  <em>DuckDB</em>
-</p>
+<table>
+<tr>
+<td width="50%">
+<img src="viewgeom_gif2.gif" width="100%">
+<br>
+<em>Numerical and Categorical Columns</em>
+</td>
+
+<td width="50%">
+<img src="viewgeom_gif_db.gif" width="100%">
+<br>
+<em>DuckDB</em>
+</td>
+</tr>
+</table>
 The viewer now includes data filtering and processing tools (>v0.1.4).
 You can run SQL queries with [DuckDB](duckdb.md) for fast and flexible selection or apply attribute filters with pandas query syntax. You can also send the dataset to QGIS with one command for full desktop visualization, or save as a new file with `--save`.
 
