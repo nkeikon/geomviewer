@@ -101,6 +101,14 @@ viewgeom earthquake.geojson --duckdb "SELECT * FROM data WHERE mag > 5" --qgis
 # Save the output as a new file
 viewgeom earthquake.geojson --duckdb "SELECT mag FROM data WHERE mag > 5" --save "filtered.geojson"
 ```
+## Use with Claude Code
+
+viewgeom includes a skill that lets Claude Code offer quick previews of vector files it works with. To install:
+
+```
+mkdir -p ~/.claude/skills/viewgeom
+curl -o ~/.claude/skills/viewgeom/SKILL.md https://raw.githubusercontent.com/nkeikon/geomviewer/main/skills/viewgeom/SKILL.md
+```
 ## Keyboard Controls
 | Key        | Action                 |
 | ---------- | ---------------------- |
