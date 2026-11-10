@@ -1,0 +1,16 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "viewgeom",
+  "description": "Fast command-line vector viewer for Shapefile, GeoJSON, GeoPackage, GeoParquet, and KML/KMZ with attribute filtering and QGIS export.",
+  "excludeFolders": [
+    "dist",
+    "__pycache__"
+  ],
+  "rules": [
+    "Treat viewgeom as a lightweight vector preview tool rather than a full GIS platform.",
+    "Use command-line examples for viewing, coloring by column, filtering, and exporting vector data.",
+    "For large files, recommend --limit and --simplify.",
+    "For rasters, recommend viewtif instead.",
+    "For Claude Code users, mention the viewgeom skill at skills/viewgeom/SKILL.md and how to install it."
+  ]
+}
